@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  service-moscow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: service-moscow-web
+    ports:
+      - "80:80"
+    restart: unless-stopped
+    environment:
+      - NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx
+    volumes:
+      - ./logs:/var/log/nginx
+    networks:
+      - service-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  service-network:
+    driver: bridge
+
+volumes:
+  logs:
+    driver: local
