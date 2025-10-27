@@ -135,7 +135,8 @@ def create_project_structure():
         f"{INSTALL_DIR}/nginx/conf.d",
         f"{INSTALL_DIR}/certbot",
         f"{INSTALL_DIR}/scripts",
-        f"{INSTALL_DIR}/logs"
+        f"{INSTALL_DIR}/logs",
+        f"{INSTALL_DIR}/letsencrypt"
     ]
     
     for dir_path in dirs:
@@ -143,8 +144,18 @@ def create_project_structure():
     
     log("Структура проекта создана!")
 
+def clone_website():
+    """ИСПРАВЛЕННОЕ клонирование исходников сайта"""
+    log("Клонирую исходники сайта...")
+    temp_dir = "/tmp/service-moscow-temp"
+    run_cmd(f"rm -rf {temp_dir}", check=False)
+    run_cmd(f"git clone https://github.com/KomarovAI/service.moscow.git {temp_dir}")
+    run_cmd(f"cp -r {temp_dir}/src {INSTALL_DIR}/")
+    run_cmd(f"rm -rf {temp_dir}")
+    log("Исходники сайта получены!")
+
 def write_docker_compose():
-    """Создание docker-compose.yml"""
+    """Создание docker-compose.yml с исправленными volume"""
     compose_content = f'''version: '3.8'
 
 services:
@@ -177,7 +188,7 @@ services:
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - certbot-webroot:/var/www/certbot
-      - letsencrypt:/etc/letsencrypt
+      - ./letsencrypt:/etc/letsencrypt:ro
       - ./logs/nginx:/var/log/nginx
 
   certbot:
@@ -187,7 +198,7 @@ services:
       - nginx
     volumes:
       - certbot-webroot:/var/www/certbot
-      - letsencrypt:/etc/letsencrypt
+      - ./letsencrypt:/etc/letsencrypt
     entrypoint: sh
     command: -c "trap exit TERM; while :; do sleep 6h & wait $$!; certbot renew --webroot -w /var/www/certbot --quiet --deploy-hook 'docker exec {PROJECT_NAME}-nginx nginx -s reload'; done"
 
@@ -197,7 +208,6 @@ networks:
 
 volumes:
   certbot-webroot:
-  letsencrypt:
 '''
     
     with open(f"{INSTALL_DIR}/docker-compose.yml", "w") as f:
@@ -206,7 +216,7 @@ volumes:
     log("docker-compose.yml создан!")
 
 def write_nginx_config():
-    """Создание конфигурации Nginx"""
+    """Создание конфигурации Nginx для HTTP (SSL добавим позже)"""
     nginx_config = f'''server {{
     listen 80;
     listen [::]:80;
@@ -215,35 +225,111 @@ def write_nginx_config():
     # ACME Challenge для Let's Encrypt
     location ^~ /.well-known/acme-challenge/ {{
         root /var/www/certbot;
-        default_type "text/plain";
         try_files $uri =404;
     }}
 
-    # Редирект на HTTPS после получения сертификата
+    # Основное проксирование на веб-контейнер
+    location / {{
+        proxy_pass http://{PROJECT_NAME}-web:80;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }}
+}}
+'''
+    
+    with open(f"{INSTALL_DIR}/nginx/conf.d/site.conf", "w") as f:
+        f.write(nginx_config)
+    
+    log("Конфигурация Nginx создана!")
+
+def write_dockerfile():
+    """Создание Dockerfile"""
+    dockerfile_content = '''FROM nginx:alpine
+
+WORKDIR /usr/share/nginx/html
+
+RUN rm -rf /usr/share/nginx/html/*
+
+COPY ./src/ /usr/share/nginx/html/
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+'''
+    
+    with open(f"{INSTALL_DIR}/Dockerfile", "w") as f:
+        f.write(dockerfile_content)
+    
+    log("Dockerfile создан!")
+
+def start_services():
+    """Запуск сервисов"""
+    log("Запускаю сервисы...")
+    run_cmd(f"cd {INSTALL_DIR} && docker compose up -d --build nginx web")
+    
+    # Ждем запуска
+    time.sleep(10)
+    log("Сервисы запущены!")
+
+def obtain_ssl_certificate():
+    """ИСПРАВЛЕННОЕ получение SSL сертификата"""
+    log("Получаю SSL сертификат...")
+    
+    # Проверяем, что сайт доступен по HTTP
+    log("Проверяю доступность сайта по HTTP...")
+    test_result = run_cmd(f"curl -I http://{DOMAIN}", check=False)
+    if not test_result:
+        warning("Сайт не отвечает по HTTP, но продолжаю...")
+    
+    # Получаем сертификат через отдельный Docker контейнер
+    cert_cmd = f'''docker run --rm \
+      --name certbot \
+      -v {INSTALL_DIR}/letsencrypt:/etc/letsencrypt \
+      -v service-moscow_certbot-webroot:/var/www/certbot \
+      certbot/certbot:latest \
+      certonly --agree-tos --no-eff-email \
+      --email {EMAIL} --webroot -w /var/www/certbot \
+      -d {DOMAIN} -d www.{DOMAIN}'''
+    
+    success = run_cmd(cert_cmd, check=False)
+    
+    if success:
+        log("SSL сертификат получен!")
+        # Обновляем конфигурацию Nginx с SSL
+        write_nginx_config_with_ssl()
+        # Перезапускаем Nginx
+        run_cmd(f"cd {INSTALL_DIR} && docker exec {PROJECT_NAME}-nginx nginx -s reload")
+        log("Nginx перезапущен с SSL!")
+    else:
+        warning("Не удалось получить SSL сертификат. Сайт работает по HTTP.")
+        return success
+    
+    return success
+
+def write_nginx_config_with_ssl():
+    """Создание полной конфигурации Nginx с SSL"""
+    nginx_config = f'''server {{
+    listen 80;
+    listen [::]:80;
+    server_name {DOMAIN} www.{DOMAIN};
+
+    location ^~ /.well-known/acme-challenge/ {{
+        root /var/www/certbot;
+        try_files $uri =404;
+    }}
+
     location / {{
         return 301 https://{DOMAIN}$request_uri;
     }}
 }}
 
 server {{
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name www.{DOMAIN};
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {DOMAIN} www.{DOMAIN};
 
-    ssl_certificate /etc/letsencrypt/live/{DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{DOMAIN}/privkey.pem;
-    ssl_trusted_certificate /etc/letsencrypt/live/{DOMAIN}/chain.pem;
-
-    # Редирект с www на основной домен
-    return 301 https://{DOMAIN}$request_uri;
-}}
-
-server {{
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name {DOMAIN};
-
-    # SSL конфигурация
     ssl_certificate /etc/letsencrypt/live/{DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{DOMAIN}/privkey.pem;
     ssl_trusted_certificate /etc/letsencrypt/live/{DOMAIN}/chain.pem;
@@ -276,14 +362,15 @@ server {{
         application/json
         image/svg+xml;
 
-    # ACME Challenge
+    if ($host = www.{DOMAIN}) {{
+        return 301 https://{DOMAIN}$request_uri;
+    }}
+
     location ^~ /.well-known/acme-challenge/ {{
         root /var/www/certbot;
-        default_type "text/plain";
         try_files $uri =404;
     }}
 
-    # Основной проксирование на контейнер с сайтом
     location / {{
         proxy_pass http://{PROJECT_NAME}-web:80;
         proxy_set_header Host $host;
@@ -291,19 +378,18 @@ server {{
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         
-        # Кэширование статических файлов
         location ~* \\.(?:jpg|jpeg|gif|png|ico|svg|css|js|woff2?|ttf|eot)$ {{
             expires 1y;
             add_header Cache-Control "public, immutable";
             access_log off;
+            proxy_pass http://{PROJECT_NAME}-web:80;
+            proxy_set_header Host $host;
         }}
     }}
 
-    # Логирование
     access_log /var/log/nginx/access.log;
     error_log /var/log/nginx/error.log;
 
-    # Обработка ошибок
     error_page 404 /404.html;
     error_page 500 502 503 504 /50x.html;
 }}
@@ -312,85 +398,7 @@ server {{
     with open(f"{INSTALL_DIR}/nginx/conf.d/site.conf", "w") as f:
         f.write(nginx_config)
     
-    log("Конфигурация Nginx создана!")
-
-def write_dockerfile():
-    """Создание Dockerfile"""
-    dockerfile_content = '''FROM nginx:alpine
-
-WORKDIR /usr/share/nginx/html
-
-RUN rm -rf /usr/share/nginx/html/*
-
-COPY ./src/ /usr/share/nginx/html/
-
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
-'''
-    
-    with open(f"{INSTALL_DIR}/Dockerfile", "w") as f:
-        f.write(dockerfile_content)
-    
-    log("Dockerfile создан!")
-
-def clone_website():
-    """Клонирование исходников сайта"""
-    log("Клонирую исходники сайта...")
-    
-    # Проверяем, существует ли уже git репозиторий
-    if os.path.exists(f"{INSTALL_DIR}/.git"):
-        log("Репозиторий уже существует, обновляю...")
-        run_cmd(f"cd {INSTALL_DIR} && git pull origin main")
-    else:
-        # Если папка существует, но это не git репозиторий - клонируем во временную папку
-        temp_dir = "/tmp/service-moscow-temp"
-        if os.path.exists(temp_dir):
-            run_cmd(f"rm -rf {temp_dir}")
-        
-        run_cmd(f"git clone https://github.com/KomarovAI/service.moscow.git {temp_dir}")
-        
-        # Копируем исходники в нужное место
-        run_cmd(f"cp -r {temp_dir}/src {INSTALL_DIR}/")
-        run_cmd(f"cp {temp_dir}/.git* {INSTALL_DIR}/", check=False)  # Копируем git файлы если есть
-        run_cmd(f"rm -rf {temp_dir}")
-    
-    log("Исходники сайта получены!")
-
-def start_services():
-    """Запуск сервисов"""
-    log("Запускаю сервисы...")
-    run_cmd(f"cd {INSTALL_DIR} && docker compose up -d --build nginx web")
-    
-    # Ждем запуска
-    time.sleep(10)
-    log("Сервисы запущены!")
-
-def obtain_ssl_certificate():
-    """Получение SSL сертификата"""
-    log("Получаю SSL сертификат...")
-    
-    # Проверяем, что сайт доступен по HTTP
-    log("Проверяю доступность сайта по HTTP...")
-    test_result = run_cmd(f"curl -I http://{DOMAIN}", check=False)
-    if not test_result:
-        warning("Сайт не отвечает по HTTP, но продолжаю...")
-    
-    # Получаем сертификат
-    cert_cmd = f'''cd {INSTALL_DIR} && docker compose run --rm certbot \\
-    certbot certonly --agree-tos --no-eff-email \\
-    --email {EMAIL} --webroot -w /var/www/certbot \\
-    -d {DOMAIN} -d www.{DOMAIN}'''
-    
-    success = run_cmd(cert_cmd, check=False)
-    
-    if success:
-        log("SSL сертификат получен!")
-        # Перезапускаем Nginx
-        run_cmd(f"cd {INSTALL_DIR} && docker exec {PROJECT_NAME}-nginx nginx -s reload")
-        log("Nginx перезапущен с SSL!")
-    else:
-        warning("Не удалось получить SSL сертификат. Сайт работает по HTTP.")
+    log("Конфигурация Nginx с SSL обновлена!")
 
 def setup_cron():
     """Настройка автообновления сертификатов"""
@@ -399,7 +407,11 @@ def setup_cron():
     # Создаем скрипт обновления
     renew_script = f'''#!/bin/bash
 cd {INSTALL_DIR}
-docker compose run --rm certbot certbot renew --quiet
+docker run --rm \
+  -v {INSTALL_DIR}/letsencrypt:/etc/letsencrypt \
+  -v service-moscow_certbot-webroot:/var/www/certbot \
+  certbot/certbot:latest \
+  renew --quiet
 docker exec {PROJECT_NAME}-nginx nginx -s reload
 '''
     
@@ -493,8 +505,9 @@ def main():
         start_services()
         
         if not args.skip_ssl:
-            obtain_ssl_certificate()
-            setup_cron()
+            ssl_success = obtain_ssl_certificate()
+            if ssl_success:
+                setup_cron()
         
         check_health()
         print_final_report()
