@@ -338,11 +338,22 @@ def clone_website():
     """Клонирование исходников сайта"""
     log("Клонирую исходники сайта...")
     
+    # Проверяем, существует ли уже git репозиторий
     if os.path.exists(f"{INSTALL_DIR}/.git"):
         log("Репозиторий уже существует, обновляю...")
         run_cmd(f"cd {INSTALL_DIR} && git pull origin main")
     else:
-        run_cmd(f"git clone https://github.com/KomarovAI/service.moscow.git {INSTALL_DIR}")
+        # Если папка существует, но это не git репозиторий - клонируем во временную папку
+        temp_dir = "/tmp/service-moscow-temp"
+        if os.path.exists(temp_dir):
+            run_cmd(f"rm -rf {temp_dir}")
+        
+        run_cmd(f"git clone https://github.com/KomarovAI/service.moscow.git {temp_dir}")
+        
+        # Копируем исходники в нужное место
+        run_cmd(f"cp -r {temp_dir}/src {INSTALL_DIR}/")
+        run_cmd(f"cp {temp_dir}/.git* {INSTALL_DIR}/", check=False)  # Копируем git файлы если есть
+        run_cmd(f"rm -rf {temp_dir}")
     
     log("Исходники сайта получены!")
 
@@ -366,9 +377,9 @@ def obtain_ssl_certificate():
         warning("Сайт не отвечает по HTTP, но продолжаю...")
     
     # Получаем сертификат
-    cert_cmd = f'''cd {INSTALL_DIR} && docker compose run --rm certbot \
-    certbot certonly --agree-tos --no-eff-email \
-    --email {EMAIL} --webroot -w /var/www/certbot \
+    cert_cmd = f'''cd {INSTALL_DIR} && docker compose run --rm certbot \\
+    certbot certonly --agree-tos --no-eff-email \\
+    --email {EMAIL} --webroot -w /var/www/certbot \\
     -d {DOMAIN} -d www.{DOMAIN}'''
     
     success = run_cmd(cert_cmd, check=False)
