@@ -9,6 +9,15 @@ services:
     restart: unless-stopped
     networks:
       - webnet
+    # Улучшения безопасности Docker
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    user: "nginx:nginx"
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost"]
       interval: 30s
@@ -27,20 +36,33 @@ services:
       - "443:443"
     networks:
       - webnet
+    # Улучшения безопасности Docker
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    user: "101:101"  # nginx пользователь в Alpine
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - certbot-webroot:/var/www/certbot
+      - certbot-webroot:/var/www/certbot:ro
       - ./letsencrypt:/etc/letsencrypt:ro
-      - ./logs/nginx:/var/log/nginx
+      - ./logs/nginx:/var/log/nginx:rw
 
   certbot:
     image: certbot/certbot:latest
     container_name: service-moscow-certbot
     depends_on:
       - nginx
+    # Улучшения безопасности Docker
+    security_opt:
+      - no-new-privileges:true
+    user: "root"  # Нужны root права для certbot
     volumes:
-      - certbot-webroot:/var/www/certbot
-      - ./letsencrypt:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot:rw
+      - ./letsencrypt:/etc/letsencrypt:rw
     entrypoint: sh
     command: -c "trap exit TERM; while :; do sleep 6h & wait $$!; certbot renew --webroot -w /var/www/certbot --quiet --deploy-hook 'docker exec service-moscow-nginx nginx -s reload'; done"
 
