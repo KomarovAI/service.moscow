@@ -10,8 +10,14 @@ RUN rm -rf /usr/share/nginx/html/*
 # Копируем файлы сайта
 COPY ./src/ /usr/share/nginx/html/
 
-# Копируем кастомную конфигурацию nginx для оптимизации
-COPY nginx.conf /etc/nginx/nginx.conf
+# Настраиваем права для безопасности
+# Не меняем владельца, так как nginx:alpine уже создан правильно
+# Пользователь nginx (UID 101) уже существует в образе
+RUN chown -R nginx:nginx /usr/share/nginx/html && \
+    chmod -R 755 /usr/share/nginx/html
+
+# Переключаемся на непривилегированного пользователя
+USER nginx
 
 # Открываем порт 80
 EXPOSE 80
