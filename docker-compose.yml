@@ -1,31 +1,52 @@
 version: '3.8'
 
 services:
-  service-moscow:
+  web:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: service-moscow-web
-    ports:
-      - "80:80"
     restart: unless-stopped
-    environment:
-      - NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx
-    volumes:
-      - ./logs:/var/log/nginx
     networks:
-      - service-network
+      - webnet
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost"]
+      test: ["CMD", "wget", "-qO-", "http://localhost"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 20s
+
+  nginx:
+    image: nginx:alpine
+    container_name: service-moscow-nginx
+    depends_on:
+      - web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - webnet
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - certbot-webroot:/var/www/certbot
+      - ./letsencrypt:/etc/letsencrypt:ro
+      - ./logs/nginx:/var/log/nginx
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: service-moscow-certbot
+    depends_on:
+      - nginx
+    volumes:
+      - certbot-webroot:/var/www/certbot
+      - ./letsencrypt:/etc/letsencrypt
+    entrypoint: sh
+    command: -c "trap exit TERM; while :; do sleep 6h & wait $$!; certbot renew --webroot -w /var/www/certbot --quiet --deploy-hook 'docker exec service-moscow-nginx nginx -s reload'; done"
 
 networks:
-  service-network:
+  webnet:
     driver: bridge
 
 volumes:
-  logs:
-    driver: local
+  certbot-webroot:
