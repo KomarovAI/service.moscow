@@ -1,0 +1,8 @@
+# Папка для изображений сайта
+
+Здесь хранятся:
+- hero-bg.png - фон главной секции
+- service-icons.png - иконки услуг  
+- bg-texture.png - фоновые текстуры
+
+Файлы доступны по URL: /assets/img/filename.ext
