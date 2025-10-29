@@ -1,0 +1,178 @@
+name: 📁 Filen Media Sync
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # Каждые 30 минут
+  workflow_dispatch:         # Ручной запуск
+  repository_dispatch:
+    types: [filen-media-changed]
+
+jobs:
+  sync-media:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Install Filen CLI
+        run: |
+          echo "📦 Installing Filen CLI..."
+          curl -fsSL https://cdn.filen.io/cli/linux_amd64.tar.gz | tar -xz
+          sudo mv filen /usr/local/bin/
+          chmod +x /usr/local/bin/filen
+          filen --version
+
+      - name: 🔐 Setup Filen credentials
+        env:
+          FILEN_EMAIL: ${{ secrets.FILEN_EMAIL }}
+          FILEN_PASSWORD: ${{ secrets.FILEN_PASSWORD }}
+          FILEN_2FA_CODE: ${{ secrets.FILEN_2FA_CODE }}
+        run: |
+          echo "🔑 Creating credentials file..."
+          echo "$FILEN_EMAIL" > .filen-cli-credentials
+          echo "$FILEN_PASSWORD" >> .filen-cli-credentials
+          echo "${FILEN_2FA_CODE:-XXXXXX}" >> .filen-cli-credentials
+
+      - name: 📂 Create local directories
+        run: |
+          echo "📁 Creating local media directories..."
+          mkdir -p src/assets/img/equipment
+          mkdir -p src/assets/img/team
+          mkdir -p src/assets/img/cases
+          mkdir -p src/assets/img/logos
+          mkdir -p src/assets/docs
+          mkdir -p src/assets/videos
+          mkdir -p src/assets/thumbs
+
+      - name: ⬇️ Download media from Filen
+        run: |
+          echo "🔄 Syncing media files from Filen..."
+          
+          # Синхронизируем каждую папку (игнорируем ошибки если папки не существуют)
+          echo "📸 Equipment images..."
+          filen download --remote "/service-moscow/images/equipment" --local "src/assets/img/equipment" --overwrite || echo "⚠️ Equipment folder not found"
+          
+          echo "👥 Team images..."
+          filen download --remote "/service-moscow/images/team" --local "src/assets/img/team" --overwrite || echo "⚠️ Team folder not found"
+          
+          echo "📋 Case studies..."
+          filen download --remote "/service-moscow/images/cases" --local "src/assets/img/cases" --overwrite || echo "⚠️ Cases folder not found"
+          
+          echo "🏷️ Logos and icons..."
+          filen download --remote "/service-moscow/images/logos" --local "src/assets/img/logos" --overwrite || echo "⚠️ Logos folder not found"
+          
+          echo "📄 Documents..."
+          filen download --remote "/service-moscow/documents" --local "src/assets/docs" --overwrite || echo "⚠️ Documents folder not found"
+          
+          echo "🎬 Videos..."
+          filen download --remote "/service-moscow/videos" --local "src/assets/videos" --overwrite || echo "⚠️ Videos folder not found"
+
+      - name: 🖼️ Optimize images
+        run: |
+          echo "🎨 Installing image optimization tools..."
+          sudo apt-get update -qq
+          sudo apt-get install -y webp imagemagick > /dev/null 2>&1
+          
+          echo "✨ Optimizing images..."
+          
+          # Функция оптимизации
+          optimize_images() {
+            local dir="$1"
+            local max_width="$2"
+            local quality="$3"
+            
+            if [[ -d "$dir" ]]; then
+              find "$dir" -type f \( -name "*.jpg" -o -name "*.jpeg" -o -name "*.png" \) | while read img; do
+                # Создаем WebP версию
+                webp_name="${img%.*}.webp"
+                if [[ ! -f "$webp_name" ]]; then
+                  cwebp -q "$quality" "$img" -o "$webp_name" 2>/dev/null && echo "🖼️  $(basename "$webp_name")"
+                fi
+                
+                # Ресайз если нужно (сохраняем оригинал)
+                if [[ -n "$max_width" ]]; then
+                  convert "$img" -resize "${max_width}x${max_width}>" "$img" 2>/dev/null || true
+                fi
+              done
+            fi
+          }
+          
+          # Оптимизируем каждую категорию с разными параметрами
+          optimize_images "src/assets/img/equipment" "1280" "85"
+          optimize_images "src/assets/img/team" "800" "90"
+          optimize_images "src/assets/img/cases" "1600" "80"
+          optimize_images "src/assets/img/logos" "512" "95"
+
+      - name: 📋 Generate media manifest
+        run: |
+          echo "📄 Generating media manifest..."
+          cat > src/assets/media-manifest.json << EOF
+          {
+            "generated_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "sync_source": "filen",
+            "folders": {
+              "equipment": $(find src/assets/img/equipment -type f -name "*" 2>/dev/null | jq -R -s -c 'split("\n")[:-1] | map(split("/")[-1])' || echo '[]'),
+              "team": $(find src/assets/img/team -type f -name "*" 2>/dev/null | jq -R -s -c 'split("\n")[:-1] | map(split("/")[-1])' || echo '[]'),
+              "cases": $(find src/assets/img/cases -type f -name "*" 2>/dev/null | jq -R -s -c 'split("\n")[:-1] | map(split("/")[-1])' || echo '[]'),
+              "logos": $(find src/assets/img/logos -type f -name "*" 2>/dev/null | jq -R -s -c 'split("\n")[:-1] | map(split("/")[-1])' || echo '[]'),
+              "documents": $(find src/assets/docs -type f -name "*" 2>/dev/null | jq -R -s -c 'split("\n")[:-1] | map(split("/")[-1])' || echo '[]'),
+              "videos": $(find src/assets/videos -type f -name "*" 2>/dev/null | jq -R -s -c 'split("\n")[:-1] | map(split("/")[-1])' || echo '[]')
+            }
+          }
+          EOF
+
+      - name: 📊 Show sync summary
+        run: |
+          echo "📈 Sync Summary:"
+          echo "Equipment: $(find src/assets/img/equipment -type f 2>/dev/null | wc -l) files"
+          echo "Team: $(find src/assets/img/team -type f 2>/dev/null | wc -l) files"
+          echo "Cases: $(find src/assets/img/cases -type f 2>/dev/null | wc -l) files"
+          echo "Logos: $(find src/assets/img/logos -type f 2>/dev/null | wc -l) files"
+          echo "Documents: $(find src/assets/docs -type f 2>/dev/null | wc -l) files"
+          echo "Videos: $(find src/assets/videos -type f 2>/dev/null | wc -l) files"
+
+      - name: 📝 Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          git add src/assets/
+          
+          if git diff --staged --quiet; then
+            echo "✅ No changes to commit"
+          else
+            git commit -m "🔄 Auto-sync: Update media from Filen.io
+            
+            - Updated media files from Filen cloud storage
+            - Optimized images (WebP conversion, resizing)
+            - Generated media manifest
+            - Sync completed at $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+            
+            git push
+            echo "✅ Changes committed and pushed"
+          fi
+
+      - name: 🧹 Cleanup
+        if: always()
+        run: |
+          rm -f .filen-cli-credentials
+          echo "🧹 Cleanup completed"
+
+      - name: 📢 Notify success (optional)
+        if: success() && env.TG_BOT_TOKEN != ''
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          MESSAGE="✅ Filen media sync completed for service.moscow
+          
+          📊 Files synced:
+          🔧 Equipment: $(find src/assets/img/equipment -type f 2>/dev/null | wc -l)
+          👥 Team: $(find src/assets/img/team -type f 2>/dev/null | wc -l)  
+          📋 Cases: $(find src/assets/img/cases -type f 2>/dev/null | wc -l)
+          🏷️ Logos: $(find src/assets/img/logos -type f 2>/dev/null | wc -l)
+          
+          🕐 $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          
+          curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d text="$MESSAGE" > /dev/null || true
