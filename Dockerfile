@@ -1,26 +1,34 @@
-# Используем легкий образ nginx для максимальной скорости
 FROM nginx:alpine
 
-# Устанавливаем рабочую директорию
-WORKDIR /usr/share/nginx/html
+# Copy static files
+COPY src/ /usr/share/nginx/html/
 
-# Удаляем стандартные файлы nginx
-RUN rm -rf /usr/share/nginx/html/*
+# Simple nginx config for static files only
+RUN echo 'server { \
+    listen 80; \
+    server_name _; \
+    root /usr/share/nginx/html; \
+    index index.html; \
+    \
+    # Static file caching \
+    location ~* \.(css|js|jpg|jpeg|gif|png|svg|ico|woff|woff2|ttf)$ { \
+        expires 1y; \
+        add_header Cache-Control "public, immutable"; \
+    } \
+    \
+    # Main location \
+    location / { \
+        try_files $uri $uri/ /index.html; \
+    } \
+    \
+    # Enable gzip \
+    gzip on; \
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript; \
+}' > /etc/nginx/conf.d/default.conf
 
-# Копируем файлы сайта
-COPY ./src/ /usr/share/nginx/html/
+# Remove default nginx config
+RUN rm /etc/nginx/conf.d/default.conf.bak 2>/dev/null || true
 
-# Настраиваем права для безопасности
-# Не меняем владельца, так как nginx:alpine уже создан правильно
-# Пользователь nginx (UID 101) уже существует в образе
-RUN chown -R nginx:nginx /usr/share/nginx/html && \
-    chmod -R 755 /usr/share/nginx/html
-
-# Переключаемся на непривилегированного пользователя
-USER nginx
-
-# Открываем порт 80
 EXPOSE 80
 
-# Команда запуска nginx
 CMD ["nginx", "-g", "daemon off;"]

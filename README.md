@@ -1,213 +1,236 @@
-# 🚀 Автодеплой сайта artur789298.work.gd
+# Service Moscow - K3s Optimized Static Website
 
-Два Python-скрипта для полного развертывания и обновления вашего сайта на VPS с автоматическим SSL.
+🚀 **Production-ready static website deployment on K3s cluster with automatic SSL, zero-downtime updates, and Docker Hub CI/CD**
 
-## 📋 Что включено
+## Overview
 
-### 🛠️ deploy.py - Полное развертывание
-- Автоустановка Docker и Docker Compose
-- Настройка файервола (UFW)
-- Клонирование репозитория сайта
-- Создание оптимизированной конфигурации Nginx
-- Автоматическое получение SSL сертификатов Let's Encrypt
-- Настройка автообновления сертификатов
-- Полная проверка работоспособности
+This project deploys a static restaurant equipment repair website to K3s cluster with:
+- ✅ **Automatic SSL** via Traefik ACME Let's Encrypt
+- ✅ **Zero-downtime deployments** with rolling updates
+- ✅ **CI/CD pipeline** GitHub Actions → Docker Hub → K3s
+- ✅ **Production optimizations** gzip, caching, security headers
+- ✅ **Network-aware scheduling** for hybrid cloud setup
 
-### 🔄 update.py - Быстрое обновление
-- Резервное копирование текущей версии
-- Обновление исходного кода из Git
-- Пересборка только измененных контейнеров
-- Проверка работоспособности после обновления
-- Очистка старых Docker образов
+## Architecture
 
-## 📦 Новое: Интеграция с Filen.io (медиа‑хранилище)
-
-Теперь медиа‑файлы (фото/видео/документы) можно хранить в Filen.io, а репозиторий будет автоматически их подтягивать и оптимизировать.
-
-- 🧩 Workflow: `.github/workflows/filen-media-sync.yml`
-- 📜 Инструкция: `docs/FILEN-INTEGRATION.md`
-- 🧰 Скрипт подготовки папок: `scripts/setup-filen-folders.sh`
-
-Быстрый старт:
-```bash
-# Настрой секреты в GitHub: FILEN_EMAIL, FILEN_PASSWORD (и FILEN_2FA_CODE при необходимости)
-# Создай структуру папок в Filen (скриптом):
-curl -fsSL https://cdn.filen.io/cli/linux_amd64.tar.gz | tar -xz && sudo mv filen /usr/local/bin/
-filen login
-bash scripts/setup-filen-folders.sh
-
-# Запусти синхронизацию вручную из GitHub Actions: 📁 Filen Media Sync
+```
+GitHub Push → GitHub Actions → Docker Hub → K3s Cluster
+                                              ↓
+                                          Traefik Ingress
+                                          (SSL + Headers)
+                                              ↓
+                                          Service (ClusterIP)
+                                              ↓
+                                          Deployment (2 replicas)
+                                              ↓
+                                          Nginx Alpine Pods
 ```
 
-## 🚀 Быстрый старт
+## Quick Start
 
-### 1. Первоначальное развертывание
+### 1. Setup GitHub Secrets
+
+Go to repository Settings → Secrets and variables → Actions:
+
+```
+DOCKERHUB_USERNAME    # Your Docker Hub username
+DOCKERHUB_TOKEN       # Docker Hub access token  
+KUBECONFIG_BASE64     # Base64 encoded kubeconfig
+```
+
+### 2. Configure Traefik SSL (one-time setup on K3s server)
 
 ```bash
-# Скачиваем скрипт развертывания
-wget https://raw.githubusercontent.com/KomarovAI/service.moscow/main/deploy.py
-
-# Запускаем полное развертывание (требует sudo)
-sudo python3 deploy.py
+# On K3s master node
+sudo nano /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
 ```
 
-### 2. Обновление контента
+Add this content:
+```yaml
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    additionalArguments:
+      - "--certificatesresolvers.letsencrypt.acme.email=artur.komarovv@gmail.com"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+    ports:
+      web:
+        exposedPort: 80
+      websecure:
+        exposedPort: 443
+```
+
+### 3. Point Domain to K3s
 
 ```bash
-# Стандартное обновление
-sudo python3 /opt/service-moscow/update.py
+# Get K3s external IP
+kubectl get nodes -o wide
 
-# Быстрое обновление без проверок
-sudo python3 /opt/service-moscow/update.py --quick
-
-# Обновление с показом логов
-sudo python3 /opt/service-moscow/update.py --show-logs
+# Update DNS: artur789298.work.gd → K3s_IP
 ```
 
-## 📁 Структура после установки
-
-```
-/opt/service-moscow/
-├── deploy.py              # Скрипт первоначальной установки
-├── update.py              # Скрипт обновления
-├── docker-compose.yml     # Конфигурация контейнеров
-├── Dockerfile             # Образ сайта
-├── nginx/
-│   └── conf.d/
-│       └── site.conf     # Конфигурация виртуального хоста
-├── scripts/
-│   └── renew-cert.sh     # Автообновление SSL
-├── backups/              # Резервные копии (создаются при обновлениях)
-├── letsencrypt/          # SSL сертификаты Let's Encrypt
-├── logs/                 # Логи Nginx
-└── src/                  # Исходники сайта
-```
-
-## ⚙️ Параметры запуска
-
-### deploy.py параметры:
-```bash
---skip-ssl          # Пропустить настройку SSL (только HTTP)
---skip-firewall     # Не настраивать файервол
-```
-
-### update.py параметры:
-```bash
---no-backup         # Не создавать резервную копию
---no-cleanup        # Не удалять старые Docker образы
---show-logs         # Показать логи после обновления
---quick             # Быстрое обновление без лишних проверок
-```
-
-## 🔧 Управление сайтом
+### 4. Deploy
 
 ```bash
-# Статус всех сервисов
-cd /opt/service-moscow && docker compose ps
-
-# Просмотр логов
-cd /opt/service-moscow && docker compose logs -f
-
-# Перезапуск конкретного сервиса
-cd /opt/service-moscow && docker compose restart nginx
-
-# Полный перезапуск
-cd /opt/service-moscow && docker compose down && docker compose up -d
-
-# Проверка SSL сертификата
-echo | openssl s_client -connect artur789298.work.gd:443 -servername artur789298.work.gd 2>/dev/null | openssl x509 -noout -dates
+# Push to main branch triggers automatic deployment
+git push origin main
 ```
 
-## 🛡️ Безопасность и производительность
+## Project Structure
 
-### Что настраивается автоматически:
-- ✅ Файервол UFW (только 22, 80, 443 порты)
-- ✅ SSL/TLS сертификаты Let's Encrypt с автообновлением
-- ✅ HTTP → HTTPS редиректы
-- ✅ Security headers (HSTS, XSS Protection, Content-Type)
-- ✅ Gzip сжатие для статических файлов
-- ✅ Кэширование статики на 1 год
-- ✅ HTTP/2 поддержка
-
-### Оптимизация производительности:
-- ✅ Nginx Alpine (легкий образ)
-- ✅ Gzip сжатие всех текстовых файлов
-- ✅ Кэш браузера для статических файлов
-- ✅ Минимальное потребление памяти
-- ✅ Автоочистка старых Docker образов
-
-## 🆘 Устранение неполадок
-
-### Проблемы с SSL:
-```bash
-# Проверить статус сертификата
-docker run --rm -v /opt/service-moscow/letsencrypt:/etc/letsencrypt certbot/certbot certificates
-
-# Принудительно обновить сертификат
-/opt/service-moscow/scripts/renew-cert.sh
-
-# Проверить конфигурацию Nginx
-cd /opt/service-moscow && docker exec service-moscow-nginx nginx -t
+```
+├── src/                    # Static website files
+│   ├── index.html
+│   ├── css/
+│   ├── js/
+│   └── images/
+├── k8s/                    # Kubernetes manifests
+│   ├── namespace.yaml
+│   ├── deployment.yaml
+│   ├── service.yaml
+│   ├── ingress.yaml
+│   ├── middleware.yaml
+│   └── pdb.yaml
+├── .github/workflows/
+│   └── deploy.yml          # CI/CD pipeline
+├── Dockerfile              # Simple nginx:alpine container
+└── README.md
 ```
 
-### Проблемы с доступностью:
+## Secrets Setup
+
+### Docker Hub Token
+
+1. Go to Docker Hub → Account Settings → Security
+2. Create "New Access Token" 
+3. Copy token to GitHub secret `DOCKERHUB_TOKEN`
+
+### Kubeconfig
+
 ```bash
-# Проверить DNS
+# On K3s server, get kubeconfig in base64
+cat /etc/rancher/k3s/k3s.yaml | base64 -w 0
+
+# Or if you have local kubectl configured
+kubectl config view --raw | base64 -w 0
+```
+
+Copy output to GitHub secret `KUBECONFIG_BASE64`
+
+## Monitoring & Management
+
+### Check Deployment Status
+
+```bash
+# Pod status
+kubectl -n service-moscow get pods
+
+# Ingress and SSL certificate
+kubectl -n service-moscow get ingress
+kubectl -n service-moscow describe ingress service-moscow
+
+# Application logs
+kubectl -n service-moscow logs -l app=service-moscow -f
+```
+
+### Manual Operations
+
+```bash
+# Manual rollout restart
+kubectl -n service-moscow rollout restart deploy/service-moscow
+
+# Scale replicas
+kubectl -n service-moscow scale deploy/service-moscow --replicas=3
+
+# Delete deployment
+kubectl delete namespace service-moscow
+```
+
+## Network-Aware Scheduling
+
+For hybrid clusters (VPS + home PCs via Tailscale), web pods are automatically scheduled on public nodes with best internet connectivity:
+
+```yaml
+# In deployment.yaml
+nodeSelector:
+  node-role.kubernetes.io/public: "true"
+```
+
+## Performance Features
+
+- **Gzip compression** via Traefik middleware
+- **Static file caching** browser cache headers
+- **HTTP/2** enabled by default
+- **Security headers** HSTS, CSP, XSS protection
+- **CDN ready** cache-friendly headers
+
+## Troubleshooting
+
+### SSL Issues
+```bash
+# Check certificate status
+kubectl -n service-moscow describe ingress service-moscow
+
+# Traefik logs
+kubectl -n kube-system logs -l app.kubernetes.io/name=traefik -f
+```
+
+### Deployment Issues
+```bash
+# Check rollout status
+kubectl -n service-moscow rollout status deploy/service-moscow
+
+# Pod events
+kubectl -n service-moscow describe pods
+```
+
+### DNS Issues
+```bash
+# Test DNS resolution
 dig artur789298.work.gd
 
-# Проверить статус контейнеров
-cd /opt/service-moscow && docker compose ps
-
-# Проверить логи Nginx
-cd /opt/service-moscow && docker compose logs nginx
+# Test from inside cluster
+kubectl run -it --rm debug --image=busybox --restart=Never -- nslookup service-moscow.service-moscow.svc.cluster.local
 ```
 
-## 📊 Мониторинг
+## Production Optimizations
 
-Встроенные health-check'и проверяют:
-- Доступность веб-контейнера каждые 30 секунд
-- Автоматический перезапуск при сбое
-- Логирование всех запросов и ошибок
+### Zero-Downtime Updates
+- 2+ replicas with rolling update strategy
+- PodDisruptionBudget ensures availability
+- Readiness probes prevent traffic to unhealthy pods
 
-## 🎯 Результат
+### Resource Limits
+```yaml
+resources:
+  requests:
+    cpu: "25m"
+    memory: "32Mi"
+  limits:
+    cpu: "100m" 
+    memory: "64Mi"
+```
 
-После запуска `deploy.py` ваш сайт будет:
-- 🌐 Доступен по адресу: https://artur789298.work.gd
-- 🔒 Защищен SSL сертификатом с автообновлением
-- ⚡ Оптимизирован для максимальной скорости загрузки
-- 🛡️ Защищен файерволом и security headers
-- 🔄 Готов к быстрым обновлениям через `update.py`
+### Security
+- Non-root container execution
+- Security headers via Traefik middleware
+- Network policies (optional)
 
-## 💻 Техническое описание сайта
+## License
 
-### Особенности
-- **100% статический** - HTML, CSS, JavaScript без зависимостей
-- **Docker-контейнеризация** - легкое развертывание на любом сервере
-- **Nginx Alpine** - оптимизированная конфигурация для максимальной скорости
+MIT License - see LICENSE file
 
-### Производительность
-- **Core Web Vitals оптимизация** - LCP < 1с, INP < 50мс, CLS = 0
-- **Gzip сжатие** - уменьшение размера на 70-80%
-- **Кэширование статики** - браузерное кэширование на 1 год
-- **Critical CSS** - инлайн критические стили
+## Contact
 
-### SEO-оптимизация
-- **Семантическая HTML5-разметка** - полная семантика
-- **Schema.org JSON-LD** - структурированные данные для LocalBusiness
-- **Open Graph и Twitter Cards** - оптимизация для соцсетей
-- **Оптимизированные meta-теги** - титлы, описания, ключевые слова
-
-### Адаптивность
-- **Mobile-First дизайн** - приоритет мобильным устройствам
-- **Responsive Grid** - CSS Grid и Flexbox
-- **Оптимизация touch-взаимодействия** - 44px минимум для кнопок
-
-## 📧 Контакты
-
-- **Автор:** KomarovAI
-- **Email:** artur.komarovv@gmail.com
-- **GitHub:** https://github.com/KomarovAI/service.moscow
-- **Сайт:** https://artur789298.work.gd
+- **Author**: KomarovAI
+- **Email**: artur.komarovv@gmail.com
+- **Website**: https://artur789298.work.gd
 
 ---
-**ВСЁ ЗЕБА! 🚀** Сайт готов к продуктивной эксплуатации.
+
+**🚀 Production-ready K3s deployment with automatic SSL and zero-downtime updates!**

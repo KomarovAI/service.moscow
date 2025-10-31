@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-moscow
+  namespace: service-moscow
+  labels:
+    app: service-moscow
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: service-moscow
+  template:
+    metadata:
+      labels:
+        app: service-moscow
+      annotations:
+        # Network-aware scheduling preferences
+        network.komarov.dev/prefer-zone: "public"
+        network.komarov.dev/max-latency: "10ms"
+        network.komarov.dev/min-bandwidth: "100mbps"
+    spec:
+      # Schedule on public nodes with good internet connectivity
+      nodeSelector:
+        node-role.kubernetes.io/public: "true"
+      
+      # Tolerate public node taints
+      tolerations:
+      - key: "public"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      
+      containers:
+      - name: web
+        image: docker.io/komarovai/service.moscow:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+          protocol: TCP
+        
+        # Health checks
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 15
+          periodSeconds: 30
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        
+        # Resource limits
+        resources:
+          requests:
+            cpu: "25m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+        
+        # Security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 101  # nginx user
+          runAsGroup: 101
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_BIND_SERVICE
+      
+      # Docker Hub registry secret
+      imagePullSecrets:
+      - name: dockerhub-creds
+      
+      # Pod security
+      securityContext:
+        fsGroup: 101
