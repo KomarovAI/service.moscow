@@ -1,0 +1,38 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: service-moscow
+  namespace: service-moscow
+  labels:
+    app: service-moscow
+  annotations:
+    # Traefik router configuration
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.rule: "Host(`artur789298.work.gd`)"
+    
+    # TLS configuration
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: "letsencrypt"
+    
+    # Security and performance middlewares
+    traefik.ingress.kubernetes.io/router.middlewares: service-moscow-security-headers@kubernetescrd,service-moscow-compress@kubernetescrd
+    
+    # Redirect HTTP to HTTPS
+    traefik.ingress.kubernetes.io/redirect-scheme: "https"
+    traefik.ingress.kubernetes.io/redirect-permanent: "true"
+spec:
+  tls:
+  - hosts:
+    - artur789298.work.gd
+    secretName: service-moscow-tls
+  rules:
+  - host: artur789298.work.gd
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: service-moscow
+            port:
+              number: 80
